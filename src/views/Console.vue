@@ -1,15 +1,33 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useRunStore } from '@/stores/run'
+import { useUIStore } from '@/stores/ui'
 import { useRunStream } from '@/composables/useRunStream'
 import ToolCallInline from '@/components/conversation/ToolCallInline.vue'
 import ToolCallDetail from '@/components/track/ToolCallDetail.vue'
+import ApprovalDialog from '@/components/approval/ApprovalDialog.vue'
 import type { ToolCall } from '@/types/agent'
 
 const messageStore = useMessageStore()
 const runStore = useRunStore()
+const uiStore = useUIStore()
 const { startRun, stop } = useRunStream()
+
+// 监听待审批工具：有就自动弹出
+watch(
+  () => {
+    const run = runStore.currentRun
+    return run ? runStore.pendingApprovals(run.id).length : 0
+  },
+  (len) => {
+    if (len > 0 && !uiStore.approvalDialog.open) {
+      const run = runStore.currentRun!
+      const pending = runStore.pendingApprovals(run.id)
+      uiStore.openApprovalDialog(pending[0])
+    }
+  },
+)
 
 const input = ref('')
 const sessionId = 'session_default'
@@ -40,20 +58,13 @@ async function handleSend() {
     <!-- 左侧：对话流 -->
     <div class="conversation">
       <div class="messages">
-        <div
-          v-for="msg in messageStore.messagesOfSession(sessionId)"
-          :key="msg.id"
-          class="msg"
-          :class="msg.role"
-        >
+        <div v-for="msg in messageStore.messagesOfSession(sessionId)" :key="msg.id" class="msg" :class="msg.role">
           <div class="role">{{ msg.role }}</div>
           <div class="content">
             <template v-for="(block, i) in msg.blocks" :key="i">
               <span v-if="block.type === 'text'">{{ block.text }}</span>
-              <ToolCallInline
-                v-else-if="block.type === 'tool_call' && findToolCall(block.toolCallId)"
-                :tool-call="findToolCall(block.toolCallId)!"
-              />
+              <ToolCallInline v-else-if="block.type === 'tool_call' && findToolCall(block.toolCallId)"
+                :tool-call="findToolCall(block.toolCallId)!" />
             </template>
             <!-- 流式期间：实时显示 streamingText -->
             <span v-if="msg.id === messageStore.streamingMessageId" class="streaming">
@@ -64,11 +75,7 @@ async function handleSend() {
       </div>
 
       <div class="input-area">
-        <el-input
-          v-model="input"
-          placeholder="输入消息，回车发送（试试 weather / multi / fail）"
-          @keyup.enter="handleSend"
-        />
+        <el-input v-model="input" placeholder="输入消息，回车发送（试试 weather / multi / fail）" @keyup.enter="handleSend" />
         <el-button type="primary" @click="handleSend">发送</el-button>
         <el-button @click="stop" :disabled="!runStore.active.runId">停止</el-button>
       </div>
@@ -88,25 +95,19 @@ async function handleSend() {
       <!-- 工具调用详情 -->
       <div v-if="runStore.currentRun && runStore.toolCallsOfRun(runStore.currentRun.id).length" class="tool-section">
         <h4>工具调用</h4>
-        <ToolCallDetail
-          v-for="tc in runStore.toolCallsOfRun(runStore.currentRun.id)"
-          :key="tc.id"
-          :tool-call="tc"
-        />
+        <ToolCallDetail v-for="tc in runStore.toolCallsOfRun(runStore.currentRun.id)" :key="tc.id" :tool-call="tc" />
       </div>
 
       <!-- 原始事件流 -->
       <div class="events">
-        <div
-          v-for="(e, i) in (runStore.currentRun?.events ?? [])"
-          :key="i"
-          class="event"
-        >
+        <div v-for="(e, i) in (runStore.currentRun?.events ?? [])" :key="i" class="event">
           <span class="event-type">{{ e.type }}</span>
           <span class="event-ts">{{ new Date(e.ts).toLocaleTimeString() }}</span>
         </div>
       </div>
     </div>
+    <!-- 审批弹窗 -->
+    <ApprovalDialog />
   </div>
 </template>
 
@@ -117,31 +118,56 @@ async function handleSend() {
   margin: 0;
   font-family: system-ui, -apple-system, sans-serif;
 }
+
 .conversation {
   flex: 1;
   display: flex;
   flex-direction: column;
 }
+
 .messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
 }
+
 .msg {
   margin-bottom: 16px;
 }
-.msg.user .role { color: #409eff; }
-.msg.assistant .role { color: #67c23a; }
-.role { font-weight: bold; margin-bottom: 4px; }
-.content { white-space: pre-wrap; line-height: 1.6; }
-.streaming { color: #67c23a; }
+
+.msg.user .role {
+  color: #409eff;
+}
+
+.msg.assistant .role {
+  color: #67c23a;
+}
+
+.role {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.content {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.streaming {
+  color: #67c23a;
+}
+
 .input-area {
   display: flex;
   gap: 8px;
   padding: 16px;
   border-top: 1px solid #eee;
 }
-.input-area .el-input { flex: 1; }
+
+.input-area .el-input {
+  flex: 1;
+}
+
 .track {
   width: 380px;
   border-left: 1px solid #eee;
@@ -149,17 +175,46 @@ async function handleSend() {
   overflow-y: auto;
   background: #fafafa;
 }
-.track h3 { margin-top: 0; }
-.run-info { margin-bottom: 12px; font-size: 13px; line-height: 1.8; }
-.empty { color: #999; font-size: 13px; }
-.tool-section { margin: 12px 0; }
-.tool-section h4 { margin: 8px 0; font-size: 13px; color: #303133; }
+
+.track h3 {
+  margin-top: 0;
+}
+
+.run-info {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.empty {
+  color: #999;
+  font-size: 13px;
+}
+
+.tool-section {
+  margin: 12px 0;
+}
+
+.tool-section h4 {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #303133;
+}
+
 .event {
   padding: 4px 0;
   border-bottom: 1px solid #f0f0f0;
   font-family: monospace;
   font-size: 12px;
 }
-.event-type { color: #409eff; margin-right: 8px; font-weight: bold; }
-.event-ts { color: #999; }
+
+.event-type {
+  color: #409eff;
+  margin-right: 8px;
+  font-weight: bold;
+}
+
+.event-ts {
+  color: #999;
+}
 </style>

@@ -75,6 +75,14 @@ export const tools: Record<string, ToolDefinition> = {
     dangerous: false,
     execute: calculate,
   },
+  db_query: {
+    name: 'db_query',
+    displayName: '数据库查询',
+    description: '执行数据库 SQL（危险操作，需人工审批）',
+    icon: '🗄️',
+    dangerous: true,
+    execute: dbQuery,
+  },
 }
 
 export function getTool(name: string): ToolDefinition | undefined {
@@ -83,4 +91,18 @@ export function getTool(name: string): ToolDefinition | undefined {
 
 export function listTools(): ToolDefinition[] {
   return Object.values(tools)
+}
+
+// ── 危险工具（M3：需要人工审批）─────────────────
+async function dbQuery(args: Record<string, unknown>): Promise<unknown> {
+  const sql = (args.sql as string) ?? ''
+  await new Promise(r => setTimeout(r, 600))
+  return {
+    sql,
+    affectedRows: 3,
+    result: [
+      { id: 1, name: 'Alice', role: 'admin' },
+      { id: 2, name: 'Bob', role: 'user' },
+    ],
+  }
 }

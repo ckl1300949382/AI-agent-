@@ -1,4 +1,5 @@
 import { getTool } from './tools'
+import { waitForApproval } from './approvals'
 import { mockLLM, type MockLLMResponse } from '../providers/mock'
 
 interface RunAgentParams {
@@ -82,7 +83,40 @@ export async function runAgent({ runId, content, model, sendEvent }: RunAgentPar
         requiresApproval,
       })
 
-      // M2 阶段：不涉及审批，直接执行工具
+      // M3：需要审批的工具，先挂起等待人工决策
+      if (requiresApproval) {
+        sendEvent({
+          type: 'tool_call_awaiting_approval',
+          ts: Date.now(),
+          toolCallId,
+        })
+
+        // 挂起当前 loop，直到用户在前端点击批准/拒绝（POST /approval 唤醒）
+        const approval = await waitForApproval(toolCallId)
+        if (approval.decision === 'approved') {
+          sendEvent({
+            type: 'tool_call_approved',
+            ts: Date.now(),
+            toolCallId,
+          })
+        } else {
+          sendEvent({
+            type: 'tool_call_rejected',
+            ts: Date.now(),
+            toolCallId,
+            reason: approval.reason,
+          })
+          // 跳过执行，把拒绝结果喂回 LLM
+          toolResults.push({
+            toolCallId,
+            name: tc.name,
+            result: `用户拒绝了该操作${approval.reason ? `：${approval.reason}` : ''}`,
+          })
+          continue
+        }
+      }
+
+      // 执行工具
       const execStart = Date.now()
       let status: 'success' | 'error' = 'success'
       let result: unknown

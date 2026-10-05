@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { Run, RunStatus, AnswerStep, ToolCallStep, ToolCall, TokenUsage } from '@/types/agent'
 import type { RunEvent } from '@/types/events'
+import { postApproval } from '@/api/runs'
 
 export const useRunStore = defineStore('run', {
   state: () => ({
@@ -223,11 +224,38 @@ export const useRunStore = defineStore('run', {
           break
         }
 
-        // M3 审批事件：暂不投影
-        case 'tool_call_awaiting_approval':
-        case 'tool_call_approved':
-        case 'tool_call_rejected':
+        // M3 审批事件：更新 toolCall 状态
+        case 'tool_call_awaiting_approval': {
+          const tc = run.toolCalls[event.toolCallId]
+          if (tc) tc.status = 'awaiting_approval'
+          run.status = 'awaiting_approval'
           break
+        }
+
+        case 'tool_call_approved': {
+          const tc = run.toolCalls[event.toolCallId]
+          if (tc) {
+            tc.status = 'running'
+            tc.approval = { decision: 'approved', decidedAt: event.ts }
+          }
+          // ★ 学员填空②：唤醒 run
+          // 提示：run.status 从 awaiting_approval 恢复为 running
+          break
+        }
+
+        case 'tool_call_rejected': {
+          const tc = run.toolCalls[event.toolCallId]
+          if (tc) {
+            tc.status = 'rejected'
+            tc.approval = {
+              decision: 'rejected',
+              decidedAt: event.ts,
+              reason: event.reason,
+            }
+          }
+          // ★ 学员填空②：唤醒 run（同上）
+          break
+        }
       }
     },
 
@@ -240,9 +268,20 @@ export const useRunStore = defineStore('run', {
       }
     },
 
+    // ── M3 审批 ──────────────────────────────
+    async approve(toolCallId: string) {
+      const run = this.currentRun
+      if (!run) return
+      await postApproval(run.id, { toolCallId, decision: 'approved' })
+    },
+
+    async reject(toolCallId: string, reason?: string) {
+      const run = this.currentRun
+      if (!run) return
+      await postApproval(run.id, { toolCallId, decision: 'rejected', reason })
+    },
+
     // ── 以下为 M2+ 预留骨架 ──────────────────────
-    approve(_toolCallId: string) { },
-    reject(_toolCallId: string, _reason?: string) { },
     loadForReplay(_runId: string) { },
     seekReplay(_index: number) { },
     play() { },

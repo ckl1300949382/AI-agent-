@@ -64,6 +64,14 @@ export async function mockLLM(
     }
   }
 
+  // 危险工具：触发数据库查询（需审批）
+  if (lower.includes('db') || lower.includes('数据库')) {
+    return {
+      text: '检测到涉及数据库的操作，我需要先查询用户信息。',
+      toolCalls: [{ name: 'db_query', args: { sql: "SELECT * FROM users WHERE role = 'admin'" } }],
+    }
+  }
+
   // 默认：纯文本回答（M1 行为）
   return {
     text: `你说了"${content}"。这是 mock 模型的纯文本回复，用于 M1 闭环验证。`,
