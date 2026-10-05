@@ -14,23 +14,40 @@ const runStore = useRunStore()
 const uiStore = useUIStore()
 const { startRun, stop } = useRunStream()
 
-// 监听待审批工具：有就自动弹出
+// 监听待审批工具：有就自动弹出；没有（被取消/拒绝）则关闭
 watch(
   () => {
     const run = runStore.currentRun
-    return run ? runStore.pendingApprovals(run.id).length : 0
+    if (!run) return 0
+    return runStore.pendingApprovals(run.id).length
   },
   (len) => {
     if (len > 0 && !uiStore.approvalDialog.open) {
       const run = runStore.currentRun!
       const pending = runStore.pendingApprovals(run.id)
       uiStore.openApprovalDialog(pending[0])
+    } else if (len === 0 && uiStore.approvalDialog.open) {
+      // run 被取消或审批已处理，关闭弹窗
+      uiStore.closeApprovalDialog()
     }
   },
 )
 
 const input = ref('')
 const sessionId = 'session_default'
+
+// 重新生成：找上一条用户消息，用同样内容再跑一次新 run
+function handleRegenerate() {
+  const messages = messageStore.messagesOfSession(sessionId)
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
+  if (!lastUserMsg) return
+  const textBlock = lastUserMsg.blocks.find((b) => b.type === 'text')
+  const content = textBlock?.type === 'text' ? textBlock.text : ''
+  if (!content) return
+  startRun({ sessionId, content, regenerateFromRunId: runStore.lastRunId ?? undefined }).catch(
+    (e) => console.error('regenerate failed', e),
+  )
+}
 
 // 根据 toolCallId 从所有 run 中查找 ToolCall
 function findToolCall(toolCallId: string): ToolCall | null {
@@ -75,9 +92,10 @@ async function handleSend() {
       </div>
 
       <div class="input-area">
-        <el-input v-model="input" placeholder="输入消息，回车发送（试试 weather / multi / fail）" @keyup.enter="handleSend" />
+        <el-input v-model="input" placeholder="输入消息，回车发送（试试 weather / multi / fail / db）" @keyup.enter="handleSend" />
         <el-button type="primary" @click="handleSend">发送</el-button>
         <el-button @click="stop" :disabled="!runStore.active.runId">停止</el-button>
+        <el-button @click="handleRegenerate" :disabled="!runStore.lastRunId || !!runStore.active.runId">重新生成</el-button>
       </div>
     </div>
 

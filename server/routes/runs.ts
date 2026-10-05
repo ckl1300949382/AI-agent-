@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
-import { resolveApproval } from '../agent/approvals'
+import { resolveApproval, rejectAllForRun } from '../agent/approvals'
+import { markCancelled } from '../agent/cancellations'
 import { listTools } from '../agent/tools'
 
 export const runsRouter = Router()
@@ -23,8 +24,12 @@ runsRouter.post('/runs/:runId/approval', (req: Request, res: Response) => {
 })
 
 // POST /api/runs/:runId/cancel
-runsRouter.post('/runs/:runId/cancel', (_req: Request, res: Response) => {
-  // M4 阶段实现
+// 无 body。标记 run 为已取消，runner 会在下一个检查点退出并推 run_end cancelled
+runsRouter.post('/runs/:runId/cancel', (req: Request, res: Response) => {
+  const { runId } = req.params
+  markCancelled(runId)
+  // 如果 run 正卡在审批等待，一并唤醒（以 rejected）
+  rejectAllForRun(runId)
   res.json({ ok: true })
 })
 
