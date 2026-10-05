@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useRunStore } from '@/stores/run'
 import { useUIStore } from '@/stores/ui'
+import { useSessionStore } from '@/stores/session'
 import { useRunStream } from '@/composables/useRunStream'
 import ToolCallInline from '@/components/conversation/ToolCallInline.vue'
 import ToolCallDetail from '@/components/track/ToolCallDetail.vue'
@@ -12,7 +13,13 @@ import type { ToolCall } from '@/types/agent'
 const messageStore = useMessageStore()
 const runStore = useRunStore()
 const uiStore = useUIStore()
+const sessionStore = useSessionStore()
 const { startRun, stop } = useRunStream()
+
+const input = ref('')
+
+// 当前会话 ID（响应式）
+const sessionId = computed(() => sessionStore.currentSessionId ?? '')
 
 // 监听待审批工具：有就自动弹出；没有（被取消/拒绝）则关闭
 watch(
@@ -27,26 +34,50 @@ watch(
       const pending = runStore.pendingApprovals(run.id)
       uiStore.openApprovalDialog(pending[0])
     } else if (len === 0 && uiStore.approvalDialog.open) {
-      // run 被取消或审批已处理，关闭弹窗
       uiStore.closeApprovalDialog()
     }
   },
 )
 
-const input = ref('')
-const sessionId = 'session_default'
+// 切换会话时：加载该会话的消息，清空当前 run 显示
+watch(
+  () => sessionStore.currentSessionId,
+  async (newId) => {
+    if (!newId) return
+    runStore.lastRunId = null
+    await messageStore.loadBySession(newId)
+  },
+)
+
+// 新建会话
+function handleNewSession() {
+  sessionStore.createSession()
+}
+
+// 切换会话
+function handleSelectSession(id: string) {
+  sessionStore.selectSession(id)
+}
+
+// 删除会话
+async function handleDeleteSession(id: string) {
+  await sessionStore.deleteSession(id)
+}
 
 // 重新生成：找上一条用户消息，用同样内容再跑一次新 run
 function handleRegenerate() {
-  const messages = messageStore.messagesOfSession(sessionId)
+  if (!sessionId.value) return
+  const messages = messageStore.messagesOfSession(sessionId.value)
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
   if (!lastUserMsg) return
   const textBlock = lastUserMsg.blocks.find((b) => b.type === 'text')
   const content = textBlock?.type === 'text' ? textBlock.text : ''
   if (!content) return
-  startRun({ sessionId, content, regenerateFromRunId: runStore.lastRunId ?? undefined }).catch(
-    (e) => console.error('regenerate failed', e),
-  )
+  startRun({
+    sessionId: sessionId.value,
+    content,
+    regenerateFromRunId: runStore.lastRunId ?? undefined,
+  }).catch((e) => console.error('regenerate failed', e))
 }
 
 // 根据 toolCallId 从所有 run 中查找 ToolCall
@@ -60,10 +91,10 @@ function findToolCall(toolCallId: string): ToolCall | null {
 
 async function handleSend() {
   const content = input.value.trim()
-  if (!content) return
+  if (!content || !sessionId.value) return
   input.value = ''
   try {
-    await startRun({ sessionId, content })
+    await startRun({ sessionId: sessionId.value, content })
   } catch (e) {
     console.error('run failed', e)
   }
@@ -72,7 +103,24 @@ async function handleSend() {
 
 <template>
   <div class="console">
-    <!-- 左侧：对话流 -->
+    <!-- 最左侧：会话列表 -->
+    <div class="session-sidebar">
+      <div class="sidebar-header">
+        <el-button type="primary" size="small" @click="handleNewSession">+ 新会话</el-button>
+      </div>
+      <div class="session-list">
+        <div v-for="s in sessionStore.sessionList" :key="s.id" class="session-item"
+          :class="{ active: s.id === sessionId }" @click="handleSelectSession(s.id)">
+          <span class="session-title">{{ s.title }}</span>
+          <el-button type="danger" size="small" link @click.stop="handleDeleteSession(s.id)">删除</el-button>
+        </div>
+        <div v-if="sessionStore.sessionList.length === 0" class="empty-session">
+          暂无会话，点击上方新建
+        </div>
+      </div>
+    </div>
+
+    <!-- 中间：对话流 -->
     <div class="conversation">
       <div class="messages">
         <div v-for="msg in messageStore.messagesOfSession(sessionId)" :key="msg.id" class="msg" :class="msg.role">
@@ -135,6 +183,60 @@ async function handleSend() {
   height: 100vh;
   margin: 0;
   font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* 会话侧边栏 */
+.session-sidebar {
+  width: 200px;
+  border-right: 1px solid #eee;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+}
+
+.sidebar-header {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.session-item:hover {
+  background: #f0f2f5;
+}
+
+.session-item.active {
+  background: #e8f3ff;
+  color: #409eff;
+}
+
+.session-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty-session {
+  color: #999;
+  font-size: 12px;
+  text-align: center;
+  padding: 20px 0;
 }
 
 .conversation {

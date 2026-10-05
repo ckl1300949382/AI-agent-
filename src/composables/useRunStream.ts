@@ -1,5 +1,6 @@
 import { useRunStore } from '@/stores/run'
 import { useMessageStore, genId } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 import { consume } from '@/api/sse'
 import { postCancel } from '@/api/runs'
 import type { Message } from '@/types/agent'
@@ -9,6 +10,7 @@ const MAX_RECONNECT = 3
 export function useRunStream() {
   const runStore = useRunStore()
   const messageStore = useMessageStore()
+  const sessionStore = useSessionStore()
 
   /**
    * 启动一次 run（新建或重新生成）。
@@ -65,6 +67,7 @@ export function useRunStream() {
           status: 'done',
         }
         messageStore.addMessage(userMessage)
+        sessionStore.addMessageId(params.sessionId, userMessage.id)
 
         assistantMessageId = genId('msg')
         const assistantMessage: Message = {
@@ -77,9 +80,11 @@ export function useRunStream() {
           runId,
         }
         messageStore.addMessage(assistantMessage)
+        sessionStore.addMessageId(params.sessionId, assistantMessageId)
 
         const run = runStore.createRun(runId, params.sessionId, userMessage.id, model)
         run.assistantMessageId = assistantMessageId
+        sessionStore.addRunId(params.sessionId, runId)
 
         runStore.setActive(runId, abort)
         messageStore.beginStreaming(assistantMessageId)

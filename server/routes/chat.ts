@@ -44,7 +44,7 @@ chatRouter.post('/chat', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Run-Id', runId)
-  res.flushHeaders()
+  res.setHeader('X-Accel-Buffering', 'no') // 禁用 Nginx/代理缓冲
 
   // ── 1. 重连：补发 lastEventId 之后的事件 ──
   for (const { seq, event } of stream.events) {
@@ -68,8 +68,8 @@ chatRouter.post('/chat', async (req: Request, res: Response) => {
   // 当前连接的心跳（每个连接独立）
   const heartbeat = setInterval(() => res.write(':hb\n\n'), 15000)
 
-  // 连接断开时移除监听
-  req.on('close', () => {
+  // 连接断开时移除监听（用 res.on('close') 而非 req.on('close')）
+  res.on('close', () => {
     stream.listeners = stream.listeners.filter((l) => l !== listener)
     clearInterval(heartbeat)
   })

@@ -2,6 +2,11 @@ import { defineStore } from 'pinia'
 import type { Run, RunStatus, AnswerStep, ToolCallStep, ToolCall, TokenUsage } from '@/types/agent'
 import type { RunEvent } from '@/types/events'
 import { postApproval } from '@/api/runs'
+import { runRepo, eventRepo } from '@/db/repo'
+
+// 节流 flush：500ms 内多次 applyEvent 只 flush 一次
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+const FLUSH_INTERVAL = 500
 
 export const useRunStore = defineStore('run', {
   state: () => ({
@@ -94,6 +99,9 @@ export const useRunStore = defineStore('run', {
 
       run.events.push(event)
       this.active.events.push(event)
+
+      // 节流：500ms 后 flush 一次
+      this.scheduleFlush()
 
       switch (event.type) {
         case 'run_start':
@@ -281,12 +289,49 @@ export const useRunStore = defineStore('run', {
       await postApproval(run.id, { toolCallId, decision: 'rejected', reason })
     },
 
-    // ── 以下为 M2+ 预留骨架 ──────────────────────
+    // ── 持久化 ──────────────────────────────
+    // 节流调度：500ms 内多次调用只 flush 一次
+    scheduleFlush() {
+      if (flushTimer) return
+      flushTimer = setTimeout(() => {
+        flushTimer = null
+        this.flushToIDB()
+      }, FLUSH_INTERVAL)
+    },
+
+    // 把当前所有 run 写入 IndexedDB
+    async flushToIDB() {
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+      for (const run of this.runs.values()) {
+        // 1. 写入 run 元信息（不含 events，events 单独存）
+        const runWithoutEvents = { ...run, events: [] }
+        await runRepo.put(runWithoutEvents)
+        // 2. 写入事件流
+        if (run.events.length > 0) {
+          await eventRepo.putBatch(run.id, run.events)
+        }
+      }
+    },
+
+    // 从 IndexedDB 加载某个 run（含事件流）到内存
+    async loadRun(runId: string): Promise<Run | null> {
+      const allRuns = await runRepo.getAll()
+      const run = allRuns.find((r) => r.id === runId)
+      if (!run) return null
+      const events = await eventRepo.getByRun(runId)
+      const fullRun = { ...run, events }
+      this.runs.set(runId, fullRun)
+      return fullRun
+    },
+
+    // ── 以下为 M6 回放预留骨架 ──────────────────────
     loadForReplay(_runId: string) { },
     seekReplay(_index: number) { },
     play() { },
     pause() { },
     setSpeed(_n: 1 | 2 | 4) { },
-    flushToIDB() { },
   },
 })
